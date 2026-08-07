@@ -1,4 +1,5 @@
 require('dotenv').config();
+const path = require('path');
 const express = require('express');
 const cors = require('cors');
 const helmet = require('helmet');
@@ -15,10 +16,17 @@ const publicShopPage = require('./routes/publicShop');
 
 const app = express();
 
-app.use(helmet());
+// contentSecurityPolicy is off because the frontend app (served as static
+// files below) loads several external CDN scripts — Chart.js, xlsx, jsPDF,
+// Quagga, Paystack — which helmet's default strict CSP would otherwise block.
+app.use(helmet({ contentSecurityPolicy: false }));
 app.use(cors({ origin: process.env.CORS_ORIGIN || '*' }));
 app.use(express.json({ limit: '2mb' }));
 app.use(morgan(process.env.NODE_ENV === 'production' ? 'combined' : 'dev'));
+
+// Serves cloud-pos-app.html (as public/index.html) at the root URL, so the
+// full POS app is reachable at https://your-domain — not just the API.
+app.use(express.static(path.join(__dirname, '..', 'public')));
 
 // Basic rate limiting on auth endpoints to slow down credential stuffing.
 const authLimiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 50 });
