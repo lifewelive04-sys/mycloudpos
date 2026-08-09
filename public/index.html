@@ -4408,6 +4408,7 @@
             </div>
             <div class="bill2-card">
               <h4>Your Usage (<span id="bill2UsagePlanName">Plan</span>)</h4>
+              <p id="bill2BranchPriceNote" style="font-size:12px; color:var(--brass-dark); margin:0 0 10px;"></p>
               <div class="bill2-usage-row"><span>Users</span><b id="bill2UsageUsersText">—</b></div>
               <div class="bill2-usage-bar"><span id="bill2UsageUsersBar" style="width:0%; background:#1F8A5A;"></span></div>
               <div class="bill2-usage-row"><span>Products</span><b id="bill2UsageProductsText">—</b></div>
@@ -6201,6 +6202,23 @@
   }
   function planLabel(planId){ return PLANS_BY_ID[planId]?.name || planId || '—'; }
 
+  // Dynamic branch pricing (client mirror of the server-side rule): every
+  // branch beyond the first included one adds 50% of the plan's base price.
+  // 1 branch = 1.0x, 2 branches = 1.5x, 3 = 2.0x, and so on — applies to
+  // every plan, and updates live as branches are added/removed.
+  let billBranchCount = 0;
+  function branchPriceMultiplier(branchCount){
+    const extraBranches = Math.max(0, (branchCount || 0) - 1);
+    return 1 + (extraBranches * BRANCH_SURCHARGE_RATE);
+  }
+  function branchAdjustedAmount(baseAmount, branchCount){
+    return Math.round(baseAmount * branchPriceMultiplier(branchCount));
+  }
+  async function refreshBillBranchCount(){
+    try{ const { branches } = await api('/branches'); billBranchCount = (branches || []).length; }
+    catch(e){ billBranchCount = 0; }
+  }
+
   const $ = (id) => document.getElementById(id);
 
   function showMsg(el, text, type){
@@ -6569,21 +6587,21 @@
       features: { reports: true, aiFeatures: false, premiumSupport: false },
     },
     {
-      id: 'starter', name: 'Starter', slug: 'starter', amount: 5000, currency: 'GHS',
+      id: 'starter', name: 'Starter', slug: 'starter', amount: 19000, currency: 'GHS',
       billingInterval: 'month', isTrialPlan: false, isActive: true, sortOrder: 1,
       desc: 'Single till, core POS + inventory.',
       limits: { maxUsers: 3, maxProducts: 300, maxBranches: 1, storageMb: 500 },
       features: { reports: true, aiFeatures: false, premiumSupport: false },
     },
     {
-      id: 'business', name: 'Business', slug: 'business', amount: 12000, currency: 'GHS',
+      id: 'business', name: 'Business', slug: 'business', amount: 28000, currency: 'GHS',
       billingInterval: 'month', isTrialPlan: false, isActive: true, sortOrder: 2,
       desc: 'Multiple staff, suppliers, and reporting.',
       limits: { maxUsers: 15, maxProducts: 5000, maxBranches: 3, storageMb: 5000 },
       features: { reports: true, aiFeatures: false, premiumSupport: true },
     },
     {
-      id: 'enterprise', name: 'Enterprise', slug: 'enterprise', amount: 25000, currency: 'GHS',
+      id: 'enterprise', name: 'Enterprise', slug: 'enterprise', amount: 38000, currency: 'GHS',
       billingInterval: 'month', isTrialPlan: false, isActive: true, sortOrder: 3,
       desc: 'Full access: unlimited staff, offline sync, all reports, AI features.',
       limits: { maxUsers: -1, maxProducts: -1, maxBranches: -1, storageMb: 50000 },
@@ -6614,6 +6632,24 @@
 
   async function bkGetPlan(planId){ return bkGet('plans', planId); }
   async function bkActivePlans(){ return (await bkAll('plans')).filter(p => p.isActive).sort((a, b) => a.sortOrder - b.sortOrder); }
+
+  // --- Branch-based dynamic pricing ---
+  // Every branch beyond the first (included) branch adds a surcharge of 50%
+  // of the plan's base price. The surcharge is additive and compounds with
+  // each extra branch: 1 branch = 1.0x, 2 branches = 1.5x, 3 = 2.0x, etc.
+  // Applies uniformly across every plan (Starter, Business, Enterprise).
+  const BRANCH_SURCHARGE_RATE = 0.5; // 50% of base plan price per extra branch
+  function bkBranchPriceMultiplier(branchCount){
+    const extraBranches = Math.max(0, (branchCount || 0) - 1);
+    return 1 + (extraBranches * BRANCH_SURCHARGE_RATE);
+  }
+  function bkBranchAdjustedAmount(baseAmount, branchCount){
+    return Math.round(baseAmount * bkBranchPriceMultiplier(branchCount));
+  }
+  async function bkBranchCountFor(businessId){
+    const branches = await bkAllByIndex('branches', 'by_business', businessId).catch(() => []);
+    return (branches || []).length;
+  }
 
   function bkInvoiceNumber(date){
     const ym = date.getFullYear() + String(date.getMonth() + 1).padStart(2, '0');
@@ -6741,7 +6777,11 @@
     if(!plan || !plan.isActive) throw new Error('Unknown or inactive plan.');
     if(plan.isTrialPlan) throw new Error('The trial plan cannot be purchased directly.');
 
-    let amount = plan.amount;
+    // Dynamic branch pricing: every branch beyond the first adds 50% of the
+    // plan's base price to the bill (2 branches = 1.5x, 3 = 2.0x, ...).
+    const branchCount = await bkBranchCountFor(session.businessId);
+    const branchMultiplier = bkBranchPriceMultiplier(branchCount);
+    let amount = bkBranchAdjustedAmount(plan.amount, branchCount);
     let discount = null;
     if(promoCode){
       const promo = await bkGet('promoCodes', promoCode);
@@ -6757,13 +6797,14 @@
     await bkPut('payments', {
       id: bkNewId(), businessId: session.businessId, planId, planType: plan.slug, amount, currency: plan.currency,
       paymentMethod, transactionReference: reference, paystackReference: reference, status: 'pending',
-      discount, createdAt: new Date().toISOString(),
+      discount, basePlanAmount: plan.amount, branchCount, branchMultiplier, createdAt: new Date().toISOString(),
     });
     // Real Paystack init returns { authorization_url, access_code, reference } — simulated here.
     return {
       reference, authorizationUrl: '#simulated-paystack-checkout', accessCode: bkNewId(),
       publicKey: 'pk_test_simulated', amount, currency: plan.currency, email: business ? business.email : '',
       planId, planLabel: plan.name, method: PAYSTACK_METHOD_LABEL[paymentMethod] || paymentMethod,
+      basePlanAmount: plan.amount, branchCount, branchMultiplier,
     };
   }
 
@@ -6858,6 +6899,8 @@
       id: bkNewId(), invoiceNumber: bkInvoiceNumber(now), businessId: payment.businessId, paymentId: payment.id,
       planId: payment.planId, planName: plan ? plan.name : payment.planType, amount: payment.amount,
       taxAmount: 0, totalAmount: payment.amount, currency: payment.currency, paymentMethod: payment.paymentMethod,
+      basePlanAmount: payment.basePlanAmount ?? (plan ? plan.amount : payment.amount),
+      branchCount: payment.branchCount ?? null, branchMultiplier: payment.branchMultiplier ?? 1,
       paymentDate: now.toISOString(), renewalDate: nextPeriodEnd.toISOString(), createdAt: now.toISOString(),
     };
     await bkPut('invoices', invoice);
@@ -6869,12 +6912,20 @@
   }
 
   function bkInvoiceTextFile(invoice, business){
-    return [
+    const lines = [
       'CLOUD POS — INVOICE',
       '====================',
       `Invoice Number: ${invoice.invoiceNumber}`,
       `Business:       ${business ? business.name : invoice.businessId}`,
       `Plan:           ${invoice.planName}`,
+    ];
+    if(invoice.branchCount && invoice.branchCount > 1){
+      lines.push(
+        `Base price:     ${invoice.currency} ${((invoice.basePlanAmount ?? invoice.amount) / 100).toFixed(2)}`,
+        `Branches:       ${invoice.branchCount} (+${Math.round(((invoice.branchMultiplier || 1) - 1) * 100)}% branch surcharge)`,
+      );
+    }
+    lines.push(
       `Amount:         ${invoice.currency} ${(invoice.amount / 100).toFixed(2)}`,
       `Tax:            ${invoice.currency} ${(invoice.taxAmount / 100).toFixed(2)}`,
       `Total:          ${invoice.currency} ${(invoice.totalAmount / 100).toFixed(2)}`,
@@ -6883,7 +6934,8 @@
       `Renewal date:   ${new Date(invoice.renewalDate).toLocaleDateString()}`,
       '',
       'Thank you for your business.',
-    ].join('\n');
+    );
+    return lines.join('\n');
   }
 
   // --- Stage 12: audit trail helpers ---
@@ -8023,6 +8075,12 @@
         warrantyMonths: body.warrantyMonths ? Math.max(parseInt(body.warrantyMonths, 10) || 0, 0) : 0,
         size: body.size ? clean(body.size, 30) : '',
         color: body.color ? clean(body.color, 30) : '',
+        // Product photo + online-store description — used by the Fresh & Co
+        // storefront (mapProductForOnlineStore reads these). Previously these
+        // were dropped here even though the New/Edit product form sent them,
+        // so photos never made it to the online store.
+        image: body.image || null,
+        description: body.description ? clean(body.description, 2000) : '',
       };
       await bkPut('lproducts', product);
       await bkAudit(session.businessId, session.userId, 'product_created', name);
@@ -8058,6 +8116,10 @@
         warrantyMonths: body.warrantyMonths !== undefined ? Math.max(parseInt(body.warrantyMonths, 10) || 0, 0) : (product.warrantyMonths || 0),
         size: body.size !== undefined ? clean(body.size, 30) : (product.size || ''),
         color: body.color !== undefined ? clean(body.color, 30) : (product.color || ''),
+        // See createProduct: keep the online-store photo/description in sync
+        // with whatever the Edit product form submitted.
+        image: body.image !== undefined ? (body.image || null) : (product.image || null),
+        description: body.description !== undefined ? clean(body.description, 2000) : (product.description || ''),
         updatedAt: new Date().toISOString(),
       });
       await bkPut('lproducts', product);
@@ -9340,13 +9402,21 @@
       const cls = isCurrent ? 'current' : (isPopular ? 'popular' : (isTop ? 'top' : ''));
       const ribbon = isCurrent ? 'YOUR CURRENT PLAN' : (isPopular ? '🔥 Most Popular' : '');
       const btnLabel = isCurrent ? '✓ Active Plan' : `Upgrade to ${escapeHtml(p.name)} →`;
+      const adjAmount = branchAdjustedAmount(p.amount, billBranchCount);
+      const hasSurcharge = billBranchCount > 1;
+      const priceHtml = hasSurcharge
+        ? `<div class="bill2-plan-price">${p.currency} ${(adjAmount / 100).toFixed(2)}<small>/mo</small></div>
+           <div class="bill2-plan-price-note" style="font-size:11.5px; color:var(--ink-soft); margin-top:-4px;">
+             Base ${p.currency} ${(p.amount / 100).toFixed(2)} + ${Math.round((branchPriceMultiplier(billBranchCount) - 1) * 100)}% for ${billBranchCount} branches
+           </div>`
+        : `<div class="bill2-plan-price">${p.currency} ${(p.amount / 100).toFixed(2)}<small>/mo</small></div>`;
       return `
       <div class="bill2-plan-card ${cls}" data-plan="${p.id}">
         ${ribbon ? `<span class="bill2-plan-ribbon">${ribbon}</span>` : ''}
         <div class="bill2-plan-icon">${icons[i] || '⭐'}</div>
         <p class="bill2-plan-name">${escapeHtml(p.name)}</p>
         <p class="bill2-plan-desc">${escapeHtml(p.desc || '')}</p>
-        <div class="bill2-plan-price">${p.currency} ${(p.amount / 100).toFixed(2)}<small>/mo</small></div>
+        ${priceHtml}
         <ul class="bill2-plan-features">
           <li><span class="chk">✓</span>Up to ${p.limits.maxUsers < 0 ? 'unlimited' : p.limits.maxUsers} users</li>
           <li><span class="chk">✓</span>${p.limits.maxProducts < 0 ? 'Unlimited' : p.limits.maxProducts} products</li>
@@ -9372,7 +9442,7 @@
     const el = $('bill2CompareTable');
     if(!el) return;
     const rows = [
-      { label: 'Price', get: p => `${p.currency} ${(p.amount / 100).toFixed(2)}/mo` },
+      { label: 'Price', get: p => `${p.currency} ${(branchAdjustedAmount(p.amount, billBranchCount) / 100).toFixed(2)}/mo${billBranchCount > 1 ? ` (${billBranchCount} branches)` : ''}` },
       { label: 'Users', get: p => p.limits.maxUsers < 0 ? 'Unlimited' : p.limits.maxUsers },
       { label: 'Products', get: p => p.limits.maxProducts < 0 ? 'Unlimited' : p.limits.maxProducts },
       { label: 'Branches', get: p => p.limits.maxBranches < 0 ? 'Unlimited' : p.limits.maxBranches },
@@ -9396,6 +9466,7 @@
 
     await refreshPlans();
     await refreshSubscription();
+    await refreshBillBranchCount();
     const sub = state.subscription;
 
     const pill = $('billStatusPill');
@@ -9441,14 +9512,27 @@
       $(barId).style.background = color;
     }
 
-    let userCount = 0, productCount = 0, branchCount = 0;
+    let userCount = 0, productCount = 0;
     try{ const { users } = await api('/users'); userCount = users.length; }catch(e){}
     try{ const data = await api('/products?page=1&limit=1'); productCount = (data.pagination && data.pagination.total) || 0; }catch(e){}
-    try{ const { branches } = await api('/branches'); branchCount = (branches || []).length; }catch(e){}
+    await refreshBillBranchCount();
+    const branchCount = billBranchCount;
 
     setBar('bill2UsageUsersText', 'bill2UsageUsersBar', userCount, plan ? plan.limits.maxUsers : null, '#1F8A5A');
     setBar('bill2UsageProductsText', 'bill2UsageProductsBar', productCount, plan ? plan.limits.maxProducts : null, '#2255A4');
     setBar('bill2UsageBranchesText', 'bill2UsageBranchesBar', branchCount, plan ? plan.limits.maxBranches : null, '#7A4FBF');
+
+    if(plan){
+      const adjAmount = branchAdjustedAmount(plan.amount, branchCount);
+      const note = $('bill2BranchPriceNote');
+      if(note){
+        note.textContent = branchCount > 1
+          ? `Your current plan is billed at ${plan.currency} ${(adjAmount / 100).toFixed(2)}/mo (base ${plan.currency} ${(plan.amount / 100).toFixed(2)} + ${Math.round((branchPriceMultiplier(branchCount) - 1) * 100)}% for ${branchCount} branches).`
+          : '';
+      }
+    }
+    // Re-render the plan grid/compare table so prices reflect the latest branch count.
+    renderPlanGrid();
   }
 
   document.querySelectorAll('.bill2-subtab').forEach(btn => {
@@ -10795,6 +10879,10 @@
       );
     }catch(e){
       console.error('Online Store failed to load:', e);
+      if(opts.public){
+        const root = $('fcRoot');
+        if(root) root.innerHTML = '<div style="padding:60px 20px; text-align:center; font-family:var(--sans); color:var(--ink-soft);">This store link isn\u2019t available right now. Please try again in a moment.</div>';
+      }
     }
   }
   window.CloudPOSBridge = {
@@ -13665,10 +13753,24 @@
      no real POS/inventory/order/customer data is connected
      in this foundation phase)
   ========================================================= */
+  // BUGFIX: loadOnlineStore() -> FreshCoOnlineShop.init() (which sets the
+  // correct 'install'/'shop' view for a public customer) only runs after an
+  // async bkGet() lookup resolves. But this module's own script calls
+  // render() synchronously the moment it loads — before that promise
+  // settles. With the old default of view:'app', that first render painted
+  // the full OWNER dashboard (products, orders, promotions, settings) into
+  // the DOM. It was hidden by CSS only until bootPublicShop()'s
+  // DOMContentLoaded handler flipped the online-store panel to `active`,
+  // which could happen before init() finished — briefly (or, if the lookup
+  // ever throws/rejects, indefinitely) showing a real customer the owner's
+  // management screen instead of the install gate or storefront. Detecting
+  // the public-shop URL up front and starting in the right view closes that
+  // window entirely.
+  const isPublicShopBoot = /(?:^|[?&])shop=/.test(window.location.search);
   const state = {
     embedded: true,            // running inside Cloud POS as the Online Store tab
-    publicMode: false,         // true when a real customer opened ?shop=<businessId> directly (no owner session) — hides owner-only affordances
-    view: 'app',               // 'login' | 'register' | 'install' | 'app' | 'shop' — starts logged in when embedded
+    publicMode: isPublicShopBoot, // true when a real customer opened ?shop=<businessId> directly (no owner session) — hides owner-only affordances
+    view: isPublicShopBoot ? 'install' : 'app', // 'login' | 'register' | 'install' | 'app' | 'shop' — starts logged in when embedded; starts at the customer gate when it's a public shop link
     installing: false,         // true while the simulated Play Store "Install" is in progress
     regStep: 1,
     sidebarOpen: false,
