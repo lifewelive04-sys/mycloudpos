@@ -10988,21 +10988,22 @@
   };
 
   // ---- Public storefront entry point ----
-  // If the page is opened with ?shop=<businessId> in the URL, skip the
-  // landing/login flow entirely and boot straight into the customer-facing
-  // shop for that business — no account needed. This is the link you share
-  // with customers (see the "Share your shop" box on the Online Store >
-  // Settings page for the ready-made link + QR code).
+  // Two ways a customer can land here:
   //
-  // NOTE: this still reads product/business data through the local
-  // bkGet/bkAllByIndex "backend" simulation. Once a real backend exists,
-  // swap those two calls (and the bkPut/bkGet calls in submitOnlineOrder,
-  // signUpCustomer, and signInCustomer above) for real API requests — this
-  // routing layer itself won't need to change.
+  //  1. ?shop=<businessId> — the local-only demo link. Reads product/
+  //     business data straight out of THIS browser's own IndexedDB, so it
+  //     only ever works on the same device that created it.
+  //
+  //  2. /shop/<slug> — a real, shared link served by pos-backend (see the
+  //     "Connect to a live backend" box on Online Store > Settings). The
+  //     backend serves this same HTML file at that path; this script then
+  //     fetches GET /api/shop/<slug> for live business + product data, so
+  //     the link and QR code work from any customer's own device.
   (function bootPublicShop(){
     const params = new URLSearchParams(window.location.search);
     const shopBusinessId = params.get('shop');
-    if(!shopBusinessId) return;
+    const liveMatch = window.location.pathname.match(/^\/shop\/([^/]+)\/?$/);
+    if(!shopBusinessId && !liveMatch) return;
     // Deferred to DOMContentLoaded because window.FreshCoOnlineShop is only
     // defined once the Online Shop module's own <script> tag (further down
     // the page) has run.
@@ -11011,9 +11012,38 @@
       $('landingScreen').style.display = 'none';
       $('appShell').classList.add('visible');
       setTab('onlinestore');
-      loadOnlineStore(shopBusinessId, { public: true });
+      if(liveMatch){
+        loadLiveShop(liveMatch[1]);
+      }else{
+        loadOnlineStore(shopBusinessId, { public: true });
+      }
     });
   })();
+
+  // Fetches a real, shared shop from pos-backend (GET /api/shop/:slug) and
+  // renders it through the same FreshCoOnlineShop.init() used everywhere
+  // else, so a live shop looks and behaves identically to the local demo —
+  // just with data that actually reaches the owner's other devices.
+  async function loadLiveShop(slug){
+    try{
+      const res = await fetch('/api/shop/' + encodeURIComponent(slug));
+      const data = await res.json().catch(() => ({}));
+      if(!res.ok || !data.business){
+        const root = $('fcRoot');
+        if(root) root.innerHTML = '<div style="padding:60px 20px; text-align:center; font-family:var(--sans); color:var(--ink-soft);">' + escapeHtml((data && data.error) || 'This store link isn\u2019t available.') + '</div>';
+        return;
+      }
+      window.FreshCoOnlineShop.init(
+        { businessId: data.business.id, businessName: data.business.name, category: '', logo: data.business.logo },
+        data.products,
+        { publicView: true, liveSlug: slug }
+      );
+    }catch(e){
+      console.error('Live shop failed to load:', e);
+      const root = $('fcRoot');
+      if(root) root.innerHTML = '<div style="padding:60px 20px; text-align:center; font-family:var(--sans); color:var(--ink-soft);">This store link isn\u2019t available right now. Please try again in a moment.</div>';
+    }
+  }
 
   async function loadReports(){
     const msg = $('repMsg');
@@ -13656,6 +13686,15 @@
   // missing, expired, or invalid, it fails silently and the landing
   // screen behaves exactly as it did before — no visible change.
   (async function restoreSession(){
+    // BUGFIX: a public "?shop=<businessId>" link must ALWAYS land the visitor
+    // on the customer storefront — never on the owner/staff admin dashboard,
+    // even if this browser/device has a saved owner or staff login (e.g. the
+    // shop owner testing their own QR code on their own phone, or a shared
+    // public device someone previously logged into). Restoring a cached
+    // session here would silently override bootPublicShop()'s routing and
+    // expose the full admin dashboard (sales figures, billing, logout, etc.)
+    // to anyone who scans the code. Bail out before touching any session.
+    if(/(?:^|[?&])shop=/.test(window.location.search) || /^\/shop\//.test(window.location.pathname)) return;
     const token = loadSessionToken();
     if(!token) return;
     state.token = token;
@@ -15893,7 +15932,7 @@
       const addrField = document.getElementById('co-addr');
       if(addrField) addrField.addEventListener('input', e=>state.shopCustomer.address=e.target.value);
       document.getElementById('co-notes').addEventListener('input', e=>state.shopCustomer.notes=e.target.value);
-      document.getElementById('checkoutForm').addEventListener('submit', e=>{
+      document.getElementById('checkoutForm').addEventListener('submit', async e=>{
         e.preventDefault();
         const c = state.shopCustomer;
         const errs = {};
@@ -15913,6 +15952,48 @@
           const p = state.products.find(pp=>pp.id===ci.productId);
           return {productId:ci.productId, name:p.name, price:p.price, qty:ci.qty};
         });
+
+        // LIVE SHOP (real pos-backend, /shop/:slug): the order must reach the
+        // actual owner, potentially on a different device — post it to the
+        // real server, which re-validates stock/pricing itself and is the
+        // one place order status will live.
+        if(state.liveSlug){
+          const submitBtn = document.querySelector('#checkoutForm button[type="submit"]');
+          if(submitBtn) submitBtn.disabled = true;
+          try{
+            const res = await fetch('/api/shop/' + encodeURIComponent(state.liveSlug) + '/orders', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ items, customer: {...c}, method: c.method, notes: c.notes }),
+            });
+            const data = await res.json().catch(() => ({}));
+            if(!res.ok){
+              state.checkoutErrors = { stock: (data && data.error) || 'Could not place order. Please try again.' };
+              if(submitBtn) submitBtn.disabled = false;
+              render();
+              return;
+            }
+            const order = data.order;
+            state.products = state.products.map(p=>{
+              const bought = items.find(i=>i.productId===p.id);
+              return bought ? {...p, stock: Math.max(0, (p.stock||0) - bought.qty)} : p;
+            });
+            state.cart = [];
+            state.checkoutOpen = false;
+            state.shopCustomer = {name:'', phone:'', address:'', notes:'', method:'delivery'};
+            state.checkoutErrors = {};
+            state.orderConfirmation = order;
+            render();
+          }catch(err){
+            state.checkoutErrors = { stock: 'Could not reach the store right now. Please check your connection and try again.' };
+            if(submitBtn) submitBtn.disabled = false;
+            render();
+          }
+          return;
+        }
+
+        // LOCAL DEMO (?shop=businessId): unchanged — writes into this same
+        // browser's own local database via CloudPOSBridge.
         const total = items.reduce((s,i)=>s+i.price*i.qty,0);
         items.forEach(i=>{
           const p = state.products.find(pp=>pp.id===i.productId);
@@ -16092,6 +16173,7 @@
       if(Array.isArray(products)) state.products = products.map(p=>({...p}));
       state.embedded = true;
       state.publicMode = !!opts.publicView;
+      state.liveSlug = opts.liveSlug || null;
       // Restore a signed-in customer for this store, if this browser has one
       if(!state.customerAccount && business && business.businessId){
         try{
