@@ -10988,22 +10988,21 @@
   };
 
   // ---- Public storefront entry point ----
-  // Two ways a customer can land here:
+  // If the page is opened with ?shop=<businessId> in the URL, skip the
+  // landing/login flow entirely and boot straight into the customer-facing
+  // shop for that business — no account needed. This is the link you share
+  // with customers (see the "Share your shop" box on the Online Store >
+  // Settings page for the ready-made link + QR code).
   //
-  //  1. ?shop=<businessId> — the local-only demo link. Reads product/
-  //     business data straight out of THIS browser's own IndexedDB, so it
-  //     only ever works on the same device that created it.
-  //
-  //  2. /shop/<slug> — a real, shared link served by pos-backend (see the
-  //     "Connect to a live backend" box on Online Store > Settings). The
-  //     backend serves this same HTML file at that path; this script then
-  //     fetches GET /api/shop/<slug> for live business + product data, so
-  //     the link and QR code work from any customer's own device.
+  // NOTE: this still reads product/business data through the local
+  // bkGet/bkAllByIndex "backend" simulation. Once a real backend exists,
+  // swap those two calls (and the bkPut/bkGet calls in submitOnlineOrder,
+  // signUpCustomer, and signInCustomer above) for real API requests — this
+  // routing layer itself won't need to change.
   (function bootPublicShop(){
     const params = new URLSearchParams(window.location.search);
     const shopBusinessId = params.get('shop');
-    const liveMatch = window.location.pathname.match(/^\/shop\/([^/]+)\/?$/);
-    if(!shopBusinessId && !liveMatch) return;
+    if(!shopBusinessId) return;
     // Deferred to DOMContentLoaded because window.FreshCoOnlineShop is only
     // defined once the Online Shop module's own <script> tag (further down
     // the page) has run.
@@ -11012,38 +11011,9 @@
       $('landingScreen').style.display = 'none';
       $('appShell').classList.add('visible');
       setTab('onlinestore');
-      if(liveMatch){
-        loadLiveShop(liveMatch[1]);
-      }else{
-        loadOnlineStore(shopBusinessId, { public: true });
-      }
+      loadOnlineStore(shopBusinessId, { public: true });
     });
   })();
-
-  // Fetches a real, shared shop from pos-backend (GET /api/shop/:slug) and
-  // renders it through the same FreshCoOnlineShop.init() used everywhere
-  // else, so a live shop looks and behaves identically to the local demo —
-  // just with data that actually reaches the owner's other devices.
-  async function loadLiveShop(slug){
-    try{
-      const res = await fetch('/api/shop/' + encodeURIComponent(slug));
-      const data = await res.json().catch(() => ({}));
-      if(!res.ok || !data.business){
-        const root = $('fcRoot');
-        if(root) root.innerHTML = '<div style="padding:60px 20px; text-align:center; font-family:var(--sans); color:var(--ink-soft);">' + escapeHtml((data && data.error) || 'This store link isn\u2019t available.') + '</div>';
-        return;
-      }
-      window.FreshCoOnlineShop.init(
-        { businessId: data.business.id, businessName: data.business.name, category: '', logo: data.business.logo },
-        data.products,
-        { publicView: true, liveSlug: slug }
-      );
-    }catch(e){
-      console.error('Live shop failed to load:', e);
-      const root = $('fcRoot');
-      if(root) root.innerHTML = '<div style="padding:60px 20px; text-align:center; font-family:var(--sans); color:var(--ink-soft);">This store link isn\u2019t available right now. Please try again in a moment.</div>';
-    }
-  }
 
   async function loadReports(){
     const msg = $('repMsg');
@@ -13694,7 +13664,7 @@
     // session here would silently override bootPublicShop()'s routing and
     // expose the full admin dashboard (sales figures, billing, logout, etc.)
     // to anyone who scans the code. Bail out before touching any session.
-    if(/(?:^|[?&])shop=/.test(window.location.search) || /^\/shop\//.test(window.location.pathname)) return;
+    if(/(?:^|[?&])shop=/.test(window.location.search)) return;
     const token = loadSessionToken();
     if(!token) return;
     state.token = token;
@@ -13809,11 +13779,11 @@
   const state = {
     embedded: true,            // running inside Cloud POS as the Online Store tab
     publicMode: isPublicShopBoot, // true when a real customer opened ?shop=<businessId> directly (no owner session) — hides owner-only affordances
-    view: isPublicShopBoot ? 'install' : 'app', // 'login' | 'register' | 'install' | 'app' | 'shop' — starts logged in when embedded; starts at the customer gate when it's a public shop link
+    view: isPublicShopBoot ? 'install' : 'app', // 'login' | 'register' | 'install' | 'app' — starts logged in when embedded; starts at the customer gate when it's a public shop link. Customers land in 'app' too, just with CUSTOMER_NAV and a 'browse'-first page.
     installing: false,         // true while the simulated Play Store "Install" is in progress
     regStep: 1,
     sidebarOpen: false,
-    page: 'home',
+    page: isPublicShopBoot ? 'browse' : 'home',
     prevPage: 'home',
     toast: null,
     forgotOpen: false,
@@ -13970,7 +13940,7 @@
     if(state.view === 'login') root.innerHTML = LoginScreen();
     else if(state.view === 'register') root.innerHTML = RegisterScreen();
     else if(state.view === 'install') root.innerHTML = InstallGateScreen();
-    else if(state.view === 'shop') root.innerHTML = ShopView();
+
     else root.innerHTML = AppShell();
     afterRender();
   }
@@ -14158,14 +14128,35 @@
     ]},
   ];
 
+  // Sidebar shown to real customers browsing the public storefront —
+  // shopping-related pages only, none of the owner's management screens.
+  const CUSTOMER_NAV = [
+    {group:'Shop', items:[
+      {id:'browse', label:'Browse Products', icon:ic.package},
+      {id:'cart', label:'Cart', icon:ic.cart},
+    ]},
+    {group:'Account', items:[
+      {id:'myOrders', label:'My Orders', icon:ic.receipt},
+      {id:'account', label:'My Account', icon:ic.users},
+    ]},
+  ];
+
   const PAGE_TITLES = {
     home:'Dashboard', profile:'Store Profile', settings:'Online Store Settings',
     products:'Products', orders:'Orders', customers:'Customers',
-    promotions:'Promotions', roles:'Roles & Permissions', orderDetail:'Order Details'
+    promotions:'Promotions', roles:'Roles & Permissions', orderDetail:'Order Details',
+    browse:'Browse Products', cart:'Cart', myOrders:'My Orders', account:'My Account'
   };
 
   function AppShell(){
     const s = state.store || {};
+    // Real customers on the public storefront get the same shell as the
+    // owner's dashboard, just with a shopping-only sidebar and no
+    // management affordances in the topbar.
+    const customerMode = !!state.publicMode;
+    const navList = customerMode ? CUSTOMER_NAV : NAV;
+    const cartCount = state.cart.reduce((n,c)=>n+c.qty,0);
+    const storeOpen = state.settings.status==='Open';
     return `
     <div class="app-shell">
       <div class="sidebar-scrim ${state.sidebarOpen?'show':''}" id="scrim"></div>
@@ -14178,19 +14169,25 @@
           </div>
         </div>
         <nav class="nav-group">
-          ${NAV.map(g=>`
+          ${navList.map(g=>`
             <div class="nav-eyebrow">${g.group}</div>
             ${g.items.map(it=>`
               <button class="nav-item ${state.page===it.id?'active':''}" data-page="${it.id}">
                 <span class="ic">${it.icon}</span>${it.label}
+                ${it.id==='cart' && cartCount ? `<span class="badge-soon">${cartCount}</span>` : ''}
                 ${it.soon?`<span class="badge-soon">SETUP</span>`:''}
               </button>
             `).join('')}
           `).join('')}
         </nav>
         <div class="sidebar-foot">
-          <div class="status-pill-mini"><span class="status-dot ${state.settings.status==='Open'?'open':'closed'}"></span>Store is ${state.settings.status}</div>
-          <button class="nav-item" id="logoutBtn">${ic.logout} Log out</button>
+          <div class="status-pill-mini"><span class="status-dot ${storeOpen?'open':'closed'}"></span>Store is ${state.settings.status}</div>
+          ${customerMode
+            ? (state.customerAccount
+                ? `<button class="nav-item" id="customerSignOut">${ic.logout} Sign out</button>`
+                : `<button class="nav-item" id="openCustomerAuth">${ic.users} Sign in</button>`)
+            : `<button class="nav-item" id="logoutBtn">${ic.logout} Log out</button>`
+          }
         </div>
       </aside>
       <div class="main-col">
@@ -14198,25 +14195,36 @@
           <div style="display:flex;align-items:center;gap:14px;">
             <button class="menu-toggle" id="menuToggle">${ic.menu}</button>
             <div>
-              <div class="crumb">Store Owner Dashboard</div>
+              <div class="crumb">${customerMode ? escapeHtml(s.businessName || 'Online Store') : 'Store Owner Dashboard'}</div>
               <h1>${PAGE_TITLES[state.page] || ''}</h1>
             </div>
           </div>
           <div class="topbar-right">
-            <button class="btn btn-ghost btn-sm" id="viewShopBtn">${ic.cart} View my shop</button>
-            <div class="store-toggle">
-              ${state.settings.status}
-              <button class="switch ${state.settings.status==='Open'?'on':''}" id="quickStatus"><span class="knob"></span></button>
-            </div>
-            <div class="avatar">${(state.account&&state.account.fullName)?initials(state.account.fullName):'?'}</div>
+            ${customerMode
+              ? `<span class="amz-status-pill ${storeOpen?'open':'closed'}">${storeOpen?'Open now':'Closed'}</span>`
+              : `<button class="btn btn-ghost btn-sm" id="viewShopBtn">${ic.cart} View my shop</button>
+                 <div class="store-toggle">
+                   ${state.settings.status}
+                   <button class="switch ${storeOpen?'on':''}" id="quickStatus"><span class="knob"></span></button>
+                 </div>`
+            }
+            <div class="avatar">${customerMode
+              ? (state.customerAccount ? initials(state.customerAccount.name) : '?')
+              : ((state.account&&state.account.fullName)?initials(state.account.fullName):'?')}</div>
           </div>
         </div>
         <div class="content">
           ${PageBody()}
-          <div class="footer-note">Store Owner Dashboard &amp; Online Shop &middot; Fresh & Co. &middot; Products &amp; orders are managed directly in this app — connect your Cloud POS anytime to sync your full catalog automatically</div>
+          ${customerMode ? '' : `<div class="footer-note">Store Owner Dashboard &amp; Online Shop &middot; Fresh & Co. &middot; Products &amp; orders are managed directly in this app — connect your Cloud POS anytime to sync your full catalog automatically</div>`}
         </div>
       </div>
     </div>
+    ${state.cartOpen?CartDrawer():''}
+    ${state.checkoutOpen?CheckoutModal():''}
+    ${state.customerAuthOpen?CustomerAuthModal():''}
+    ${state.orderConfirmation?OrderConfirmationModal():''}
+    ${customerMode && !state.aiOpen?AiFab():''}
+    ${customerMode && state.aiOpen?AiPanel():''}
     ${state.toast ? `<div class="toast">${ic.check} ${state.toast}</div>` : ''}
     `;
   }
@@ -14236,7 +14244,11 @@
       case 'customers': return CustomersPage();
       case 'promotions': return PromotionsPage();
       case 'roles': return RolesPage();
-      default: return HomePage();
+      case 'browse': return BrowsePage();
+      case 'cart': return CartPage();
+      case 'myOrders': return MyOrdersPage();
+      case 'account': return AccountPage();
+      default: return state.publicMode ? BrowsePage() : HomePage();
     }
   }
 
@@ -14649,9 +14661,12 @@
   }
 
   /* =========================================================
-     ONLINE SHOP (customer-facing view — reads live from state.products)
+     ONLINE SHOP (customer-facing pages — rendered inside the same
+     AppShell as the owner dashboard, via CUSTOMER_NAV. Reads live
+     from state.products. Cart/checkout/auth modals are rendered
+     once at the AppShell level, not per-page.)
   ========================================================= */
-  function ShopView(){
+  function BrowsePage(){
     const s = state.store || {};
     const all = (state.products||[]).filter(p=>p.visible!==false);
     const cats = Array.from(new Set(all.map(p=>p.category).filter(Boolean)));
@@ -14664,43 +14679,16 @@
     if(sort==='price-asc') shown.sort((a,b)=>a.price-b.price);
     else if(sort==='price-desc') shown.sort((a,b)=>b.price-a.price);
     else if(sort==='name-asc') shown.sort((a,b)=>a.name.localeCompare(b.name));
-    const cartCount = state.cart.reduce((n,c)=>n+c.qty,0);
-    const storeOpen = state.settings.status==='Open';
     return `
-    <div class="shop-wrap">
-      <header class="amz-header">
-        <div class="amz-header-inner">
-          ${state.publicMode ? '' : `<button class="amz-back" id="backToDashboard" title="Back to dashboard" aria-label="Back to dashboard">${ic.home}</button>`}
-          <div class="amz-brand">
-            <div class="amz-logo">${s.logo?`<img src="${s.logo}"/>`:(s.businessName?s.businessName[0]:'F')}</div>
-            <span class="amz-brand-name">${escapeHtml(s.businessName||'Your Store')}</span>
-          </div>
-          <div class="amz-search">
-            <input type="text" id="shopSearchInput" placeholder="Search ${escapeHtml(s.businessName||'this store')}" value="${escapeHtml(state.shopSearch||'')}"/>
-            <button class="amz-search-btn" id="shopSearchBtn" aria-label="Search">${ic.search}</button>
-          </div>
-          <div class="amz-header-right">
-            <span class="amz-status-pill ${storeOpen?'open':'closed'}">${storeOpen?'Open now':'Closed'}</span>
-            ${state.customerAccount
-              ? `<button class="amz-account-btn" id="customerSignOut" title="Sign out">${ic.users} <span class="amz-account-label">Hi, ${escapeHtml((state.customerAccount.name||'').split(' ')[0])}</span></button>`
-              : `<button class="amz-account-btn" id="openCustomerAuth">${ic.users} <span class="amz-account-label">Sign in</span></button>`
-            }
-            <button class="amz-cart-btn" id="openCart">${ic.cart}<span class="amz-cart-label">Cart</span>${cartCount?`<span class="cart-count">${cartCount}</span>`:''}</button>
-          </div>
-        </div>
-      </header>
-      <div class="amz-infobar">
-        <div class="amz-infobar-inner">
-          <strong>${escapeHtml(s.businessName||'Your Store')}</strong>
-          ${s.address?`<span>${ic.store} ${escapeHtml(s.address)}</span>`:''}
-          ${s.openTime?`<span>${ic.clock} ${s.openTime}\u2013${s.closeTime}</span>`:''}
-        </div>
+      <div class="amz-search" style="max-width:480px;margin-bottom:16px;">
+        <input type="text" id="shopSearchInput" placeholder="Search ${escapeHtml(s.businessName||'this store')}" value="${escapeHtml(state.shopSearch||'')}"/>
+        <button class="amz-search-btn" id="shopSearchBtn" aria-label="Search">${ic.search}</button>
       </div>
       ${HeroCarousel(s, all)}
-      ${!state.settings.visible ? `<div class="banner-msg banner-info" style="margin:14px 16px 0;max-width:1400px;">${ic.check} Heads up — your store is currently hidden. This is a preview of how it will look to customers once visibility is turned on.</div>` : ''}
-      ${state.settings.visible && !state.settings.acceptOrders ? `<div class="banner-msg banner-info" style="margin:14px 16px 0;max-width:1400px;">${ic.check} This store isn\u2019t accepting new orders right now. Browsing is still available.</div>` : ''}
+      ${!state.settings.visible ? `<div class="banner-msg banner-info" style="margin:14px 0;">${ic.check} Heads up — your store is currently hidden. This is a preview of how it will look to customers once visibility is turned on.</div>` : ''}
+      ${state.settings.visible && !state.settings.acceptOrders ? `<div class="banner-msg banner-info" style="margin:14px 0;">${ic.check} This store isn\u2019t accepting new orders right now. Browsing is still available.</div>` : ''}
       ${NewArrivalsStrip(all)}
-      <div class="amz-body">
+      <div class="amz-body" style="padding:0;margin-top:14px;">
         <aside class="amz-sidebar">
           <div class="amz-filter-block">
             <div class="amz-filter-title">Category</div>
@@ -14727,14 +14715,107 @@
           ${shown.length===0 ? emptyState(ic.box,'No products found','Try a different search, category, or filter.') : `<div class="product-grid">${shown.map(p=>ProductCard(p)).join('')}</div>`}
         </main>
       </div>
-    </div>
-    ${state.cartOpen?CartDrawer():''}
-    ${state.checkoutOpen?CheckoutModal():''}
-    ${state.customerAuthOpen?CustomerAuthModal():''}
-    ${state.orderConfirmation?OrderConfirmationModal():''}
-    ${!state.aiOpen?AiFab():''}
-    ${state.aiOpen?AiPanel():''}
-    ${state.toast ? `<div class="toast">${ic.check} ${state.toast}</div>` : ''}
+    `;
+  }
+
+  /* ---------- Cart (full page — same cart data/logic as the cart drawer) ---------- */
+  function CartPage(){
+    const items = state.cart.map(c=>{
+      const p = state.products.find(pp=>pp.id===c.productId);
+      return p ? {...c, p} : null;
+    }).filter(Boolean);
+    const total = items.reduce((sum,i)=>sum+i.p.price*i.qty,0);
+    const itemCount = items.reduce((n,i)=>n+i.qty,0);
+    return `
+      <div class="page-head"><div><h2>Your cart</h2><p>${itemCount?`${itemCount} item${itemCount===1?'':'s'} ready for checkout.`:'Add products from the shop to get started.'}</p></div></div>
+      ${items.length===0 ? emptyState(ic.cart,'Your cart is empty','Browse products and add a few to your cart.') : `
+        <div class="card card-pad">
+          <div class="cart-items">
+            ${items.map(i=>{
+              const atMax = i.p.stock!=null && i.qty>=i.p.stock;
+              return `
+              <div class="cart-item">
+                <div class="cart-item-thumb">${i.p.image?`<img src="${i.p.image}"/>`:ic.image}</div>
+                <div class="cart-item-info">
+                  <div class="cart-item-top">
+                    <div class="cart-item-name">${escapeHtml(i.p.name)}</div>
+                    <button class="cart-item-remove" data-cart-remove="${i.p.id}" aria-label="Remove ${escapeHtml(i.p.name)}" title="Remove item">${ic.trash}</button>
+                  </div>
+                  <div class="cart-item-price">GHS ${Number(i.p.price).toFixed(2)} each</div>
+                  ${atMax?`<div class="cart-stock-note">Only ${i.p.stock} in stock</div>`:''}
+                  <div class="cart-item-bottom">
+                    <div class="qty-stepper">
+                      <button data-cart-dec="${i.p.id}" aria-label="Decrease quantity">\u2212</button>
+                      <span>${i.qty}</span>
+                      <button data-cart-inc="${i.p.id}" aria-label="Increase quantity" ${atMax?'disabled':''}>+</button>
+                    </div>
+                    <div class="cart-item-linetotal">GHS ${(i.p.price*i.qty).toFixed(2)}</div>
+                  </div>
+                </div>
+              </div>
+            `;}).join('')}
+          </div>
+          <div class="cart-drawer-foot" style="padding-top:16px;">
+            <div class="cart-total-row"><span>Subtotal</span><strong>GHS ${total.toFixed(2)}</strong></div>
+            <p class="cart-subtext">Delivery fee and any promotions are confirmed at checkout.</p>
+            <button class="btn btn-primary btn-block" id="goCheckout" ${!state.settings.acceptOrders?'disabled':''}>${state.settings.acceptOrders?'Checkout':'Store not accepting orders'}</button>
+            <button class="cart-clear-btn" id="clearCart">Clear cart</button>
+          </div>
+        </div>
+      `}
+    `;
+  }
+
+  /* ---------- My Orders (customer's own order history) ---------- */
+  function MyOrdersPage(){
+    if(!state.customerAccount){
+      return `
+        <div class="page-head"><div><h2>My Orders</h2><p>Sign in to see your order history with this store.</p></div></div>
+        ${emptyState(ic.receipt,'Sign in to view your orders','Your past and current orders will appear here once you\u2019re signed in.')}
+        <div style="text-align:center;margin-top:-8px;"><button class="btn btn-primary btn-sm" id="openCustomerAuth">Sign in</button></div>
+      `;
+    }
+    const phone = state.customerAccount.phone;
+    const orders = (state.orders||[]).filter(o=>o.customer && o.customer.phone===phone);
+    return `
+      <div class="page-head"><div><h2>My Orders</h2><p>Orders you\u2019ve placed with ${escapeHtml((state.store&&state.store.businessName)||'this store')}.</p></div></div>
+      ${orders.length===0 ? emptyState(ic.receipt, 'No orders yet', 'Orders you place will show up here with their live status.') : `
+        <div class="card">
+          <table>
+            <thead><tr><th>Order</th><th>Items</th><th>Total</th><th>Status</th></tr></thead>
+            <tbody>
+              ${orders.map(o=>`
+                <tr>
+                  <td>#${o.id}</td>
+                  <td>${o.items.reduce((n,i)=>n+i.qty,0)} item(s)</td>
+                  <td>GHS ${o.total.toFixed(2)}</td>
+                  <td><span class="tag ${tagClass(o.status)}">${o.status}</span></td>
+                </tr>
+              `).join('')}
+            </tbody>
+          </table>
+        </div>
+      `}
+    `;
+  }
+
+  /* ---------- My Account ---------- */
+  function AccountPage(){
+    if(!state.customerAccount){
+      return `
+        <div class="page-head"><div><h2>My Account</h2><p>Sign in to save your details for faster checkout next time.</p></div></div>
+        ${emptyState(ic.users,'You\u2019re not signed in','Sign in or create an account to save your details and track orders.')}
+        <div style="text-align:center;margin-top:-8px;"><button class="btn btn-primary btn-sm" id="openCustomerAuth">Sign in</button></div>
+      `;
+    }
+    const c = state.customerAccount;
+    return `
+      <div class="page-head"><div><h2>My Account</h2><p>Your details with ${escapeHtml((state.store&&state.store.businessName)||'this store')}.</p></div></div>
+      <div class="card card-pad">
+        <div class="toggle-row"><div class="t">Name</div><div class="d">${escapeHtml(c.name||'')}</div></div>
+        <div class="toggle-row"><div class="t">Phone</div><div class="d">${escapeHtml(c.phone||'')}</div></div>
+        <button class="btn btn-ghost btn-sm" id="customerSignOut" style="margin-top:14px;">${ic.logout} Sign out</button>
+      </div>
     `;
   }
 
@@ -15475,7 +15556,8 @@
         // form already open, same as first-launching a freshly installed
         // app. Successful sign-up (or sign-in) reveals the storefront
         // underneath, already scoped to this business.
-        state.view = 'shop';
+        state.view = 'app';
+        state.page = 'browse';
         state.customerAuthOpen = true;
         state.customerAuthMode = 'signup';
         state.customerAuthForm = { name:'', phone:'', pin:'', pinConfirm:'' };
@@ -15602,8 +15684,9 @@
 
     const viewShopBtn = document.getElementById('viewShopBtn');
     if(viewShopBtn) viewShopBtn.addEventListener('click', ()=>{
-      state.prevPage = state.page;
-      state.view = 'shop';
+      // Owner preview: jump straight to the Browse Products page (same
+      // AppShell, still shows the owner's own sidebar/topbar).
+      state.page = 'browse';
       state.shopCategory = 'All';
       render();
     });
@@ -15744,9 +15827,6 @@
     }
 
     // ---- ONLINE SHOP ----
-    const backToDashboard = document.getElementById('backToDashboard');
-    if(backToDashboard) backToDashboard.addEventListener('click', ()=>{ state.view='app'; state.page = state.prevPage||'home'; render(); });
-
     document.querySelectorAll('[data-shopcat]').forEach(btn=>{
       btn.addEventListener('click', ()=>{ state.shopCategory = btn.getAttribute('data-shopcat'); render(); });
     });
@@ -15932,7 +16012,7 @@
       const addrField = document.getElementById('co-addr');
       if(addrField) addrField.addEventListener('input', e=>state.shopCustomer.address=e.target.value);
       document.getElementById('co-notes').addEventListener('input', e=>state.shopCustomer.notes=e.target.value);
-      document.getElementById('checkoutForm').addEventListener('submit', async e=>{
+      document.getElementById('checkoutForm').addEventListener('submit', e=>{
         e.preventDefault();
         const c = state.shopCustomer;
         const errs = {};
@@ -15952,48 +16032,6 @@
           const p = state.products.find(pp=>pp.id===ci.productId);
           return {productId:ci.productId, name:p.name, price:p.price, qty:ci.qty};
         });
-
-        // LIVE SHOP (real pos-backend, /shop/:slug): the order must reach the
-        // actual owner, potentially on a different device — post it to the
-        // real server, which re-validates stock/pricing itself and is the
-        // one place order status will live.
-        if(state.liveSlug){
-          const submitBtn = document.querySelector('#checkoutForm button[type="submit"]');
-          if(submitBtn) submitBtn.disabled = true;
-          try{
-            const res = await fetch('/api/shop/' + encodeURIComponent(state.liveSlug) + '/orders', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ items, customer: {...c}, method: c.method, notes: c.notes }),
-            });
-            const data = await res.json().catch(() => ({}));
-            if(!res.ok){
-              state.checkoutErrors = { stock: (data && data.error) || 'Could not place order. Please try again.' };
-              if(submitBtn) submitBtn.disabled = false;
-              render();
-              return;
-            }
-            const order = data.order;
-            state.products = state.products.map(p=>{
-              const bought = items.find(i=>i.productId===p.id);
-              return bought ? {...p, stock: Math.max(0, (p.stock||0) - bought.qty)} : p;
-            });
-            state.cart = [];
-            state.checkoutOpen = false;
-            state.shopCustomer = {name:'', phone:'', address:'', notes:'', method:'delivery'};
-            state.checkoutErrors = {};
-            state.orderConfirmation = order;
-            render();
-          }catch(err){
-            state.checkoutErrors = { stock: 'Could not reach the store right now. Please check your connection and try again.' };
-            if(submitBtn) submitBtn.disabled = false;
-            render();
-          }
-          return;
-        }
-
-        // LOCAL DEMO (?shop=businessId): unchanged — writes into this same
-        // browser's own local database via CloudPOSBridge.
         const total = items.reduce((s,i)=>s+i.price*i.qty,0);
         items.forEach(i=>{
           const p = state.products.find(pp=>pp.id===i.productId);
@@ -16173,7 +16211,6 @@
       if(Array.isArray(products)) state.products = products.map(p=>({...p}));
       state.embedded = true;
       state.publicMode = !!opts.publicView;
-      state.liveSlug = opts.liveSlug || null;
       // Restore a signed-in customer for this store, if this browser has one
       if(!state.customerAccount && business && business.businessId){
         try{
@@ -16183,16 +16220,18 @@
       }
       // First-time visitors from the public shop link see the "get the app"
       // install gate first (like scanning a QR and landing on the Play
-      // Store), then sign up, then land straight in the shop. Returning
-      // customers recognized on this browser skip straight to the shop —
-      // same as already having the app installed and being logged in.
-      state.view = opts.publicView ? (state.customerAccount ? 'shop' : 'install') : 'app';
+      // Store), then sign up, then land straight in the shop (AppShell with
+      // CUSTOMER_NAV, landing on Browse Products). Returning customers
+      // recognized on this browser skip straight to the shop — same as
+      // already having the app installed and being logged in.
+      state.view = opts.publicView ? (state.customerAccount ? 'app' : 'install') : 'app';
+      if(opts.publicView && state.customerAccount) state.page = 'browse';
       state.shopCategory = 'All';
       render();
     },
     refreshProducts: function(products){
       if(Array.isArray(products)) state.products = products.map(p=>({...p}));
-      if(state.view === 'app' || state.view === 'shop') render();
+      if(state.view === 'app') render();
     }
   };
 
