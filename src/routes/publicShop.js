@@ -11,13 +11,22 @@ function escapeHtml(str) {
 
 // GET /shop/:slug — PUBLIC, server-rendered. This is the actual page a
 // customer's phone lands on when it scans the "Share your shop" QR code.
-// Plain HTML + vanilla JS (no build step), but now a full storefront:
+// Plain HTML + vanilla JS (no build step), full storefront: hero carousel,
 // search, categories, cart, sign up/sign in, and real checkout — wired
 // straight into the existing /api/shop and /api/customers routes.
+//
+// NOTE: this intentionally does NOT include the "Ask AI to shop" assistant
+// from the admin-side preview build. That widget calls api.anthropic.com
+// directly from the browser with no API key, which only works inside the
+// Claude.ai artifact preview environment (which proxies/injects credentials
+// automatically) — it will not function on a real deployment. To bring that
+// feature here for real, add a POST /api/shop/ai-assist route that holds
+// ANTHROPIC_API_KEY server-side and proxies the request; the front-end here
+// can then call that route instead of api.anthropic.com directly.
 router.get('/:slug', async (req, res) => {
   const business = await prisma.business.findUnique({
     where: { slug: req.params.slug },
-    select: { id: true, slug: true, name: true, logoUrl: true, currency: true },
+    select: { id: true, slug: true, name: true, logoUrl: true, currency: true, description: true },
   });
   if (!business) {
     return res.status(404).send('<h1>Store not found</h1><p>This shop link is no longer valid.</p>');
@@ -32,6 +41,53 @@ router.get('/:slug', async (req, res) => {
   const categories = [...new Set(products.map((p) => p.category).filter(Boolean))];
   const initial = business.name.trim().charAt(0).toUpperCase() || 'S';
 
+  // ---- Hero carousel slides (server-rendered, real data) ----
+  const inStock = products.filter((p) => (p.stock || 0) > 0);
+  const pool = inStock.length ? inStock : products;
+  const featuredPicks = [];
+  if (pool.length) {
+    const step = Math.max(1, Math.floor(pool.length / 3));
+    for (let i = 0; i < pool.length && featuredPicks.length < 3; i += step) featuredPicks.push(pool[i]);
+  }
+  const bizName = escapeHtml(business.name || 'our store');
+  const heroSlides = [];
+  heroSlides.push(`
+    <div class="hero-media"><div class="hero-fallback"></div></div>
+    <div class="hero-overlay"></div>
+    <div class="hero-copy">
+      <span class="hero-eyebrow">Welcome</span>
+      <h2>Welcome to ${bizName}</h2>
+      <p>${business.description ? escapeHtml(business.description) : 'Freshly stocked shelves, friendly service, and fast delivery — right to your door.'}</p>
+      <button class="hero-cta" data-hero-cta>Shop now</button>
+    </div>`);
+  featuredPicks.forEach((p, i) => {
+    const eyebrows = ['Now in stock', 'Customer favorite', 'Fresh this week'];
+    heroSlides.push(`
+      <div class="hero-media">${p.image ? `<img src="${escapeHtml(p.image)}" alt="">` : '<div class="hero-fallback"></div>'}</div>
+      <div class="hero-overlay"></div>
+      <div class="hero-copy">
+        <span class="hero-eyebrow">${eyebrows[i % eyebrows.length]}</span>
+        <h2>${escapeHtml(p.name)}</h2>
+        <div class="hero-price-badge">${currency} ${Number(p.price || 0).toFixed(2)}</div>
+        <p>Grab it while it lasts — added fresh to the shelf.</p>
+        <button class="hero-cta" data-hero-cta>Shop now</button>
+      </div>`);
+  });
+  heroSlides.push(`
+    <div class="hero-media"><div class="hero-fallback"></div></div>
+    <div class="hero-overlay"></div>
+    <div class="hero-copy">
+      <span class="hero-eyebrow">Trusted by neighbours</span>
+      <h2>Shop with confidence</h2>
+      <p>Real people, real quality checks — every order picked and packed with care before it reaches your door.</p>
+      <button class="hero-cta" data-hero-cta>Browse the shop</button>
+    </div>`);
+  const heroHtml = `
+    <section class="hero-carousel" aria-label="Store highlights" data-hero-carousel>
+      ${heroSlides.map((html, i) => `<div class="hero-slide${i === 0 ? ' active' : ''}" data-hero-slide="${i}">${html}</div>`).join('')}
+      <div class="hero-dots">${heroSlides.map((_, i) => `<span class="${i === 0 ? 'active' : ''}"></span>`).join('')}</div>
+    </section>`;
+
   res.send(`<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -39,7 +95,7 @@ router.get('/:slug', async (req, res) => {
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>${escapeHtml(business.name)} — Shop</title>
 <style>
-  :root{ --ink:#14181C; --ink-soft:#5B6672; --line:#D6DEE3; --paper:#F1F4F6; --brand:#E0762A; --brand-dark:#B8571A; --ok:#1F8A5A; --err:#B23A2E; }
+  :root{ --ink:#14181C; --ink-soft:#5B6672; --line:#D6DEE3; --paper:#F1F4F6; --brand:#E0762A; --brand-dark:#B8571A; --ok:#1F8A5A; --err:#B23A2E; --forest:#14472F; --gold:#E8963E; --terracotta:#E0762A; }
   *{box-sizing:border-box;}
   body{font-family:system-ui,-apple-system,'Segoe UI',Roboto,sans-serif;margin:0;background:var(--paper);color:var(--ink);}
   header{background:var(--ink);color:#fff;padding:14px 16px;display:flex;align-items:center;gap:10px;position:sticky;top:0;z-index:5;}
@@ -49,6 +105,26 @@ router.get('/:slug', async (req, res) => {
   #accountBtn{background:none;border:1px solid rgba(255,255,255,.35);color:#fff;border-radius:16px;padding:6px 10px;font-size:12px;cursor:pointer;}
   #cartBtn{background:none;border:none;color:#fff;cursor:pointer;position:relative;padding:6px;font-size:20px;line-height:1;}
   #cartCount{position:absolute;top:0;right:0;background:var(--brand);color:#fff;font-size:10px;font-weight:700;border-radius:999px;min-width:16px;height:16px;display:flex;align-items:center;justify-content:center;padding:0 3px;}
+
+  /* Hero carousel */
+  .hero-carousel{position:relative;width:100%;height:300px;overflow:hidden;background:var(--forest);}
+  .hero-slide{position:absolute;inset:0;opacity:0;z-index:0;transition:opacity 0.85s ease;}
+  .hero-slide.active{opacity:1;z-index:1;}
+  .hero-media{position:absolute;inset:0;overflow:hidden;}
+  .hero-media img, .hero-fallback{width:100%;height:100%;object-fit:cover;}
+  .hero-fallback{background:linear-gradient(135deg,var(--forest) 0%,#123024 55%,var(--gold) 160%);}
+  .hero-overlay{position:absolute;inset:0;background:linear-gradient(100deg,rgba(15,25,18,0.82) 0%,rgba(15,25,18,0.5) 55%,rgba(15,25,18,0.16) 100%);}
+  .hero-copy{position:relative;height:100%;display:flex;flex-direction:column;justify-content:center;padding:0 24px;max-width:440px;color:#fff;}
+  .hero-eyebrow{font-size:11.5px;letter-spacing:0.1em;text-transform:uppercase;color:var(--gold);font-weight:700;margin-bottom:8px;}
+  .hero-copy h2{font-size:24px;line-height:1.15;margin:0 0 10px;font-weight:700;color:#fff;}
+  .hero-copy p{font-size:13.5px;line-height:1.5;color:rgba(255,255,255,0.85);margin:0 0 16px;}
+  .hero-price-badge{display:inline-block;background:rgba(255,255,255,0.14);border:1px solid rgba(255,255,255,0.3);padding:4px 10px;border-radius:20px;font-size:12px;font-weight:700;margin-bottom:12px;width:fit-content;}
+  .hero-cta{align-self:flex-start;background:var(--terracotta);color:#fff;border:none;padding:10px 20px;border-radius:10px;font-size:13.5px;font-weight:700;cursor:pointer;}
+  .hero-cta:hover{background:#e0522c;}
+  .hero-dots{position:absolute;bottom:14px;left:50%;transform:translateX(-50%);display:flex;gap:7px;z-index:2;}
+  .hero-dots span{width:6px;height:6px;border-radius:50%;background:rgba(255,255,255,0.4);transition:background .3s, transform .3s;}
+  .hero-dots span.active{background:#fff;transform:scale(1.25);}
+
   .searchWrap{padding:12px 16px 0;max-width:520px;margin:0 auto;}
   #search{width:100%;padding:10px 12px;border:1px solid var(--line);border-radius:10px;font-size:14px;}
   .chips{display:flex;gap:8px;overflow-x:auto;padding:10px 16px;max-width:520px;margin:0 auto;-webkit-overflow-scrolling:touch;}
@@ -98,6 +174,38 @@ router.get('/:slug', async (req, res) => {
   .receipt-head{text-align:center;margin-bottom:12px;}
   .receipt-head .tick{width:44px;height:44px;border-radius:50%;background:#E6F4EC;color:var(--ok);display:flex;align-items:center;justify-content:center;margin:0 auto 8px;font-size:20px;}
   .receipt-meta{display:flex;justify-content:space-between;font-size:12px;color:var(--ink-soft);padding:4px 0;}
+
+  @media(max-width:600px){ .hero-carousel{height:240px;} .hero-copy h2{font-size:19px;} .hero-copy p{font-size:12.5px;} }
+
+  /* AI shopping assistant */
+  .ai-fab{position:fixed;right:18px;bottom:80px;z-index:40;display:flex;align-items:center;gap:8px;background:var(--forest);color:#fff;border:none;border-radius:999px;padding:12px 16px 12px 12px;font-size:13px;font-weight:700;cursor:pointer;box-shadow:0 10px 24px -8px rgba(15,25,18,0.5);}
+  .ai-fab:hover{background:#1a5a3c;}
+  .ai-fab-ic{width:20px;height:20px;border-radius:50%;background:var(--gold);display:flex;align-items:center;justify-content:center;flex-shrink:0;color:var(--forest);font-size:12px;}
+  @media(max-width:600px){ .ai-fab span.ai-fab-label{display:none;} .ai-fab{padding:13px;bottom:76px;} }
+  .ai-panel-overlay{position:fixed;inset:0;background:rgba(15,17,17,0.4);z-index:60;display:none;align-items:flex-end;justify-content:flex-end;}
+  .ai-panel-overlay.open{display:flex;}
+  .ai-panel{width:100%;max-width:380px;background:#fff;height:100%;display:flex;flex-direction:column;box-shadow:-12px 0 32px rgba(15,17,17,0.14);}
+  .ai-panel-head{display:flex;align-items:center;gap:10px;padding:16px;border-bottom:1px solid var(--line);flex-shrink:0;background:var(--forest);color:#fff;}
+  .ai-panel-head .ttl{flex:1;}
+  .ai-panel-head .ttl strong{display:block;font-size:14px;}
+  .ai-panel-head .ttl span{font-size:11px;color:rgba(255,255,255,0.65);}
+  .ai-panel-head button{background:rgba(255,255,255,0.12);border:none;width:26px;height:26px;border-radius:50%;color:#fff;font-size:12px;cursor:pointer;flex-shrink:0;}
+  .ai-panel-body{flex:1;overflow-y:auto;padding:14px;display:flex;flex-direction:column;gap:10px;}
+  .ai-msg{max-width:85%;padding:9px 12px;border-radius:12px;font-size:13px;line-height:1.4;}
+  .ai-msg.assistant{background:var(--paper);color:var(--ink);align-self:flex-start;border-bottom-left-radius:3px;}
+  .ai-msg.user{background:var(--forest);color:#fff;align-self:flex-end;border-bottom-right-radius:3px;}
+  .ai-chip-row{display:flex;flex-wrap:wrap;gap:6px;margin-top:6px;}
+  .ai-chip-row button{border:1px solid var(--line);background:#fff;border-radius:999px;padding:5px 10px;font-size:11.5px;cursor:pointer;}
+  .ai-typing{display:flex;gap:4px;align-self:flex-start;padding:8px 12px;}
+  .ai-typing span{width:6px;height:6px;border-radius:50%;background:var(--ink-soft);opacity:.5;animation:aiBlink 1s infinite;}
+  .ai-typing span:nth-child(2){animation-delay:.2s;} .ai-typing span:nth-child(3){animation-delay:.4s;}
+  @keyframes aiBlink{0%,80%,100%{opacity:.3;}40%{opacity:1;}}
+  .ai-suggest-row{display:flex;flex-wrap:wrap;gap:6px;padding:0 14px 10px;}
+  .ai-suggest-row button{border:1px solid var(--line);background:#fff;border-radius:999px;padding:6px 11px;font-size:11.5px;cursor:pointer;}
+  .ai-panel-foot{border-top:1px solid var(--line);padding:10px;display:flex;gap:8px;flex-shrink:0;}
+  .ai-panel-foot input{flex:1;border:1px solid var(--line);border-radius:10px;padding:9px 12px;font-size:13px;}
+  .ai-panel-foot button{background:var(--forest);color:#fff;border:none;border-radius:10px;padding:0 14px;font-weight:700;font-size:13px;cursor:pointer;}
+  .ai-panel-foot button:disabled{opacity:.5;cursor:not-allowed;}
 </style>
 </head>
 <body>
@@ -107,6 +215,8 @@ router.get('/:slug', async (req, res) => {
   <button id="accountBtn">Sign in</button>
   <button id="cartBtn">🛒<span id="cartCount" style="display:none;">0</span></button>
 </header>
+
+${heroHtml}
 
 <div class="searchWrap"><input id="search" placeholder="Search ${escapeHtml(business.name)}"></div>
 <div class="chips" id="chips">
@@ -119,6 +229,30 @@ router.get('/:slug', async (req, res) => {
 </main>
 
 <div id="cartBar"><span id="cartSummary"></span><button id="openCartBtn">View cart</button></div>
+
+<button class="ai-fab" id="aiFabBtn" aria-label="Open shopping assistant">
+  <span class="ai-fab-ic">✦</span>
+  <span class="ai-fab-label">Ask AI to shop</span>
+</button>
+<div class="ai-panel-overlay" id="aiPanelOverlay">
+  <div class="ai-panel">
+    <div class="ai-panel-head">
+      <span class="ai-fab-ic">✦</span>
+      <div class="ttl"><strong>Shopping Assistant</strong><span>Ask me to add items or plan a meal</span></div>
+      <button id="closeAiPanel" aria-label="Close assistant">✕</button>
+    </div>
+    <div class="ai-panel-body" id="aiPanelBody"></div>
+    <div class="ai-suggest-row" id="aiQuickRow">
+      <button data-ai-quick="Add 5 eggs to my cart">Add 5 eggs to my cart</button>
+      <button data-ai-quick="I want to make stew — what do I need?">I want to make stew — what do I need?</button>
+      <button data-ai-quick="What can I make for breakfast?">What can I make for breakfast?</button>
+    </div>
+    <form class="ai-panel-foot" id="aiForm">
+      <input type="text" id="aiInputField" placeholder="e.g. Add 10 soaps to my cart" autocomplete="off"/>
+      <button type="submit" id="aiSendBtn">Send</button>
+    </form>
+  </div>
+</div>
 
 <!-- Cart sheet -->
 <div class="overlay" id="cartOverlay">
@@ -203,6 +337,30 @@ router.get('/:slug', async (req, res) => {
   document.querySelectorAll('[data-close]').forEach(btn=>{
     btn.addEventListener('click', ()=> closeSheet(btn.getAttribute('data-close')));
   });
+
+  // ---- Hero carousel (auto-rotate + CTA scrolls to products) ----
+  (function initHero(){
+    const heroEl = document.querySelector('[data-hero-carousel]');
+    if(!heroEl) return;
+    const slides = Array.from(heroEl.querySelectorAll('.hero-slide'));
+    const dots = Array.from(heroEl.querySelectorAll('.hero-dots span'));
+    let idx = 0;
+    function show(i){
+      slides.forEach(s=>s.classList.remove('active'));
+      dots.forEach(d=>d.classList.remove('active'));
+      idx = (i + slides.length) % slides.length;
+      slides[idx].classList.add('active');
+      if(dots[idx]) dots[idx].classList.add('active');
+    }
+    if(slides.length > 1){
+      setInterval(()=> show(idx+1), 5000);
+    }
+    heroEl.querySelectorAll('[data-hero-cta]').forEach(btn=>{
+      btn.addEventListener('click', ()=>{
+        document.getElementById('search').scrollIntoView({behavior:'smooth', block:'start'});
+      });
+    });
+  })();
 
   // ---- Product grid ----
   function renderGrid(){
@@ -381,8 +539,6 @@ router.get('/:slug', async (req, res) => {
       const order = await res.json();
       if(!res.ok){ fulfillMsg.textContent = order.error || 'Could not place order.'; fulfillMsg.style.color = 'var(--err)'; placeBtn.disabled = false; return; }
 
-      // Build the confirmation from what we already know client-side
-      // (the API returns ids/quantities — names/prices we already have).
       const rows = cartEntries().map(e =>
         '<div class="receipt-meta"><span>'+escapeText(e.product.name)+' × '+e.qty+'</span><span>'+money(e.product.price*e.qty)+'</span></div>'
       ).join('');
@@ -393,10 +549,6 @@ router.get('/:slug', async (req, res) => {
         + '<hr style="border:none;border-top:1px solid var(--paper);margin:8px 0;">'
         + '<div class="receipt-meta" style="font-weight:700;color:var(--ink);"><span>Total</span><span>'+money(order.total)+'</span></div>';
 
-      // Reflect the purchase in the on-screen stock immediately — the
-      // server already decremented real stock; without this the grid
-      // would show stale numbers/enabled Add buttons until a manual
-      // page reload.
       cartEntries().forEach(e => { e.product.stock = Math.max(0, e.product.stock - e.qty); });
       state.cart = {};
       renderGrid(); renderCartBar(); renderCartSheet();
@@ -410,6 +562,92 @@ router.get('/:slug', async (req, res) => {
       placeBtn.disabled = false;
     }
   });
+
+  // ---- AI shopping assistant ----
+  // Calls our own server (/api/shop/ai-assist), which holds the Anthropic
+  // API key and does the actual model call — the browser never sees the key.
+  const aiState = { messages: [], busy: false, greeted: false };
+  function aiMsgHtml(role, text){
+    return '<div class="ai-msg '+role+'">'+escapeText(text)+'</div>';
+  }
+  function renderAiBody(){
+    const body = $('aiPanelBody');
+    if(!aiState.greeted && aiState.messages.length === 0){
+      body.innerHTML = aiMsgHtml('assistant', "Hi! I'm your shopping assistant for "+ (document.title.split(' — ')[0] || 'this store') +". Ask me to add things to your cart, or tell me what you're cooking and I'll work out what you need from what's on the shelf.");
+    } else {
+      body.innerHTML = aiState.messages.map(m => {
+        let html = aiMsgHtml(m.role, m.text);
+        if(m.role === 'assistant' && (m.suggestions||[]).length){
+          html += '<div class="ai-chip-row">'+m.suggestions.map(s=>{
+            const p = PRODUCTS.find(pp=>pp.id===s.productId);
+            return p ? '<button data-ai-add="'+p.id+'" data-ai-qty="'+s.qty+'">+ '+escapeText(p.name)+(s.qty>1?' ×'+s.qty:'')+'</button>' : '';
+          }).join('')+'</div>';
+        }
+        return html;
+      }).join('');
+    }
+    if(aiState.busy) body.innerHTML += '<div class="ai-typing"><span></span><span></span><span></span></div>';
+    body.scrollTop = body.scrollHeight;
+    $('aiQuickRow').style.display = aiState.messages.length === 0 ? 'flex' : 'none';
+  }
+  $('aiPanelBody').addEventListener('click', (e) => {
+    const btn = e.target.closest('[data-ai-add]');
+    if(!btn) return;
+    const qty = (state.cart[btn.getAttribute('data-ai-add')]?.qty || 0) + Number(btn.getAttribute('data-ai-qty')||1);
+    setQty(btn.getAttribute('data-ai-add'), qty);
+    btn.textContent = 'Added ✓';
+    btn.disabled = true;
+  });
+
+  $('aiFabBtn').addEventListener('click', () => { openSheet2('aiPanelOverlay'); renderAiBody(); $('aiInputField').focus(); });
+  $('closeAiPanel').addEventListener('click', () => closeSheet2('aiPanelOverlay'));
+  function openSheet2(id){ $(id).classList.add('open'); }
+  function closeSheet2(id){ $(id).classList.remove('open'); }
+
+  document.querySelectorAll('[data-ai-quick]').forEach(btn=>{
+    btn.addEventListener('click', () => sendAiMessage(btn.getAttribute('data-ai-quick')));
+  });
+
+  $('aiForm').addEventListener('submit', (e) => {
+    e.preventDefault();
+    const val = $('aiInputField').value.trim();
+    if(!val || aiState.busy) return;
+    $('aiInputField').value = '';
+    sendAiMessage(val);
+  });
+
+  async function sendAiMessage(text){
+    if(aiState.busy) return;
+    aiState.messages.push({ role:'user', text });
+    aiState.busy = true;
+    renderAiBody();
+    $('aiSendBtn').disabled = true; $('aiInputField').disabled = true;
+    try{
+      const res = await fetch('/api/shop/ai-assist', {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({
+          slug: SLUG, message: text,
+          history: aiState.messages.slice(0,-1).slice(-10),
+        }),
+      });
+      const data = await res.json();
+      if(!res.ok){
+        aiState.messages.push({ role:'assistant', text: data.error || "Sorry, I'm having trouble right now — please try again." });
+      } else {
+        (data.actions||[]).forEach(a => {
+          const qty = (state.cart[a.productId]?.qty || 0) + a.qty;
+          setQty(a.productId, qty);
+        });
+        aiState.messages.push({ role:'assistant', text: data.reply || '', suggestions: data.suggestions || [] });
+      }
+    }catch(e){
+      aiState.messages.push({ role:'assistant', text: "Network error — please try again." });
+    }
+    aiState.busy = false;
+    $('aiSendBtn').disabled = false; $('aiInputField').disabled = false;
+    renderAiBody();
+    $('aiInputField').focus();
+  }
 
   renderGrid();
   renderCartBar();
