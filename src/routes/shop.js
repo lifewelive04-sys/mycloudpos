@@ -6,6 +6,23 @@ const { requireCustomer } = require('../middleware/auth');
 
 const router = express.Router();
 
+// GET /api/shop/orders/business — STAFF-ONLY. Real orders placed by real
+// customers through the live storefront, for the owner/manager's Orders
+// page. Placed above the "/:slug" route further down isn't required since
+// this path has two segments and "/:slug" only ever matches one — but it's
+// kept near the top for clarity.
+router.get('/orders/business', requireStaff, async (req, res) => {
+  const orders = await prisma.order.findMany({
+    where: { businessId: req.staff.businessId },
+    include: {
+      customer: { select: { fullName: true, phone: true, email: true } },
+      items: { include: { product: { select: { name: true } } } },
+    },
+    orderBy: { createdAt: 'desc' },
+  });
+  res.json(orders);
+});
+
 // GET /api/shop/:slug — PUBLIC. Storefront info + products for a shop link/QR scan.
 // This is what the customer's phone loads first when it hits the real,
 // publicly-hosted share link (e.g. https://yourapp.com/shop/:slug).
