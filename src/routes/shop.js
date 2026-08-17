@@ -29,7 +29,7 @@ router.get('/orders/business', requireStaff, async (req, res) => {
 router.get('/:slug', async (req, res) => {
   const business = await prisma.business.findUnique({
     where: { slug: req.params.slug },
-    select: { slug: true, name: true, logoUrl: true, currency: true },
+    select: { slug: true, name: true, logoUrl: true, currency: true, supportPhone: true },
   });
   if (!business) return res.status(404).json({ error: 'Store not found' });
 
