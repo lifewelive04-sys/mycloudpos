@@ -26,7 +26,7 @@ function escapeHtml(str) {
 router.get('/:slug', async (req, res) => {
   const business = await prisma.business.findUnique({
     where: { slug: req.params.slug },
-    select: { id: true, slug: true, name: true, logoUrl: true, currency: true, description: true },
+    select: { id: true, slug: true, name: true, logoUrl: true, currency: true },
   });
   if (!business) {
     return res.status(404).send('<h1>Store not found</h1><p>This shop link is no longer valid.</p>');
@@ -57,7 +57,7 @@ router.get('/:slug', async (req, res) => {
     <div class="hero-copy">
       <span class="hero-eyebrow">Welcome</span>
       <h2>Welcome to ${bizName}</h2>
-      <p>${business.description ? escapeHtml(business.description) : 'Freshly stocked shelves, friendly service, and fast delivery — right to your door.'}</p>
+      <p>Freshly stocked shelves, friendly service, and fast delivery — right to your door.</p>
       <button class="hero-cta" data-hero-cta>Shop now</button>
     </div>`);
   featuredPicks.forEach((p, i) => {
