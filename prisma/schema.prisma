@@ -1,28 +1,23 @@
 // Cloud POS — Prisma schema
 // Multi-tenant: every table hangs off Business, scoped by businessId.
-
 generator client {
   provider = "prisma-client-js"
 }
-
 datasource db {
   provider = "postgresql"
   url      = env("DATABASE_URL")
 }
-
 enum Role {
   OWNER
   MANAGER
   CASHIER
 }
-
 enum OrderStatus {
   PENDING
   PAID
   FULFILLED
   CANCELLED
 }
-
 model Business {
   id         String   @id @default(cuid())
   slug       String   @unique // short public id used in the shop share link, e.g. ?shop=slug
@@ -32,17 +27,16 @@ model Business {
   phone      String?
   address    String?
   logoUrl    String?
+  supportPhone String? // shown on the public storefront so customers can reach the store directly
   currency   String   @default("GHS")
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt
-
   users      User[]
   products   Product[]
   sales      Sale[]
   customers  Customer[]
   orders     Order[]
 }
-
 model User {
   id           String   @id @default(cuid())
   business     Business @relation(fields: [businessId], references: [id])
@@ -53,12 +47,9 @@ model User {
   role         Role     @default(CASHIER)
   active       Boolean  @default(true)
   createdAt    DateTime @default(now())
-
   sales        Sale[]
-
   @@index([businessId])
 }
-
 model Product {
   id          String   @id @default(cuid())
   business    Business @relation(fields: [businessId], references: [id])
@@ -73,13 +64,10 @@ model Product {
   inShop      Boolean  @default(true)
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
-
   saleItems   SaleItem[]
   orderItems  OrderItem[]
-
   @@index([businessId])
 }
-
 model Sale {
   id            String   @id @default(cuid())
   business      Business @relation(fields: [businessId], references: [id])
@@ -90,12 +78,9 @@ model Sale {
   paymentMethod String?
   clientTxnId   String   @unique // used for receipt QR verification
   createdAt     DateTime @default(now())
-
   items         SaleItem[]
-
   @@index([businessId])
 }
-
 model SaleItem {
   id         String  @id @default(cuid())
   sale       Sale    @relation(fields: [saleId], references: [id])
@@ -105,7 +90,6 @@ model SaleItem {
   quantity   Int
   unitPrice  Decimal @db.Decimal(12, 2)
 }
-
 model Customer {
   id           String   @id @default(cuid())
   business     Business @relation(fields: [businessId], references: [id])
@@ -113,14 +97,14 @@ model Customer {
   fullName     String
   email        String
   phone        String?
+  address      String? // last-used delivery address, auto-filled on future orders
+  latitude     Float?  // GPS coordinates captured via "Use my location" at checkout
+  longitude    Float?
   passwordHash String
   createdAt    DateTime @default(now())
-
   orders       Order[]
-
   @@unique([businessId, email])
 }
-
 model Order {
   id           String      @id @default(cuid())
   business     Business    @relation(fields: [businessId], references: [id])
@@ -131,12 +115,9 @@ model Order {
   total        Decimal     @db.Decimal(12, 2)
   fulfillment  String?
   createdAt    DateTime    @default(now())
-
   items        OrderItem[]
-
   @@index([businessId])
 }
-
 model OrderItem {
   id         String  @id @default(cuid())
   order      Order   @relation(fields: [orderId], references: [id])
