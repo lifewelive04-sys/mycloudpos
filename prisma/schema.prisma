@@ -28,6 +28,12 @@ model Business {
   address    String?
   logoUrl    String?
   supportPhone String? // shown on the public storefront so customers can reach the store directly
+  category     String? // e.g. "Grocery & Supermarket" — shown on the storefront
+  description  String? // shown in the storefront's welcome banner
+  coverUrl     String? // wide banner image used behind the storefront's welcome slide
+  openTime     String? // e.g. "08:00" — 24h HH:MM, shown on the storefront
+  closeTime    String? // e.g. "20:00"
+  deliveryInfo String? // free text, e.g. "Delivery within 5km, GHS 15 flat fee" — shown at checkout
   currency   String   @default("GHS")
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt
