@@ -22,7 +22,7 @@ function escapeHtml(str) {
 router.get('/:slug', async (req, res) => {
   const business = await prisma.business.findUnique({
     where: { slug: req.params.slug },
-    select: { id: true, slug: true, name: true, logoUrl: true, currency: true, supportPhone: true },
+    select: { id: true, slug: true, name: true, logoUrl: true, currency: true, supportPhone: true, category: true, description: true, coverUrl: true, openTime: true, closeTime: true, deliveryInfo: true },
   });
   if (!business) {
     return res.status(404).send('<h1>Store not found</h1><p>This shop link is no longer valid.</p>');
@@ -45,14 +45,18 @@ router.get('/:slug', async (req, res) => {
     for (let i = 0; i < pool.length && featuredPicks.length < 3; i += step) featuredPicks.push(pool[i]);
   }
   const bizName = escapeHtml(business.name || 'our store');
+  const hoursText = (business.openTime && business.closeTime) ? `Open ${escapeHtml(business.openTime)} – ${escapeHtml(business.closeTime)}` : '';
+  const welcomeDesc = business.description
+    ? escapeHtml(business.description)
+    : 'Freshly stocked shelves, friendly service, and fast delivery — right to your door.';
   const heroSlides = [];
   heroSlides.push(`
-    <div class="hero-media"><div class="hero-fallback"></div></div>
+    <div class="hero-media">${business.coverUrl ? `<img src="${escapeHtml(business.coverUrl)}" alt="">` : '<div class="hero-fallback"></div>'}</div>
     <div class="hero-overlay"></div>
     <div class="hero-copy">
       <span class="hero-eyebrow">Welcome</span>
       <h2>Welcome to ${bizName}</h2>
-      <p>Freshly stocked shelves, friendly service, and fast delivery — right to your door.</p>
+      <p>${welcomeDesc}${hoursText ? ` · ${hoursText}` : ''}</p>
       <button class="hero-cta" data-hero-cta>Shop now</button>
     </div>`);
   featuredPicks.forEach((p, i) => {
@@ -89,6 +93,10 @@ router.get('/:slug', async (req, res) => {
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>${escapeHtml(business.name)} — Shop</title>
+<link rel="icon" type="image/x-icon" href="/favicon.ico">
+<link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png">
+<link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png">
+<meta name="theme-color" content="#E0762A">
 <style>
   :root{ --ink:#14181C; --ink-soft:#5B6672; --line:#D6DEE3; --paper:#F1F4F6; --brand:#E0762A; --brand-dark:#B8571A; --ok:#1F8A5A; --err:#B23A2E; --forest:#14472F; --gold:#E8963E; --terracotta:#E0762A; }
   *{box-sizing:border-box;}
@@ -99,6 +107,8 @@ router.get('/:slug', async (req, res) => {
   .avatar img{width:100%;height:100%;object-fit:cover;}
   header h1{margin:0;font-size:16px;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
   header .support-link{color:rgba(255,255,255,0.75);font-size:11px;text-decoration:none;border:1px solid rgba(255,255,255,0.25);border-radius:14px;padding:5px 9px;white-space:nowrap;}
+  .store-info-strip{max-width:720px;margin:0 auto;padding:6px 16px 0;font-size:11.5px;color:var(--ink-soft);}
+  .delivery-note{background:var(--paper);border-radius:8px;padding:10px 12px;font-size:12.5px;color:var(--ink);margin-bottom:14px;}
   #accountBtn{background:none;border:1px solid rgba(255,255,255,.35);color:#fff;border-radius:16px;padding:6px 10px;font-size:12px;cursor:pointer;}
   #backBtn{background:none;border:none;color:#fff;cursor:pointer;font-size:20px;padding:2px 4px;}
   #cartBtn{background:none;border:none;color:#fff;cursor:pointer;position:relative;padding:6px;font-size:20px;line-height:1;}
@@ -261,6 +271,7 @@ router.get('/:slug', async (req, res) => {
     <button id="accountBtn">Account</button>
     <button id="cartBtn">🛒<span id="cartCount" style="display:none;">0</span></button>
   </header>
+  ${(business.category || hoursText) ? `<div class="store-info-strip">${[business.category ? escapeHtml(business.category) : '', hoursText].filter(Boolean).join(' · ')}</div>` : ''}
 
   ${heroHtml}
 
@@ -288,6 +299,7 @@ router.get('/:slug', async (req, res) => {
 <div id="deliveryView" class="hidden">
   <header><button id="deliveryBackBtn">←</button><h1>Delivery details</h1></header>
   <div class="page-view">
+    ${business.deliveryInfo ? `<p class="delivery-note">${escapeHtml(business.deliveryInfo)}</p>` : ''}
     <div class="field"><label>Full name</label><input id="dv_name"></div>
     <div class="field"><label>Phone number</label><input id="dv_phone" type="tel"></div>
     <div class="field">
