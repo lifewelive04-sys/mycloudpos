@@ -140,19 +140,19 @@ router.get('/:slug', async (req, res) => {
   .instock-toggle input{width:16px;height:16px;}
 
   main{max-width:720px;margin:0 auto;padding:10px 16px 90px;}
-  .grid{display:grid;grid-template-columns:repeat(2,1fr);gap:10px;}
-  @media(min-width:520px){ .grid{grid-template-columns:repeat(3,1fr);} }
-  .card{background:#fff;border-radius:12px;padding:10px;display:flex;flex-direction:column;}
-  .card .thumb{width:100%;aspect-ratio:1/1;border-radius:8px;background:var(--paper);display:flex;align-items:center;justify-content:center;overflow:hidden;color:var(--ink-soft);font-size:24px;margin-bottom:8px;}
+  .grid{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;}
+  @media(min-width:520px){ .grid{gap:10px;} }
+  .card{background:#fff;border-radius:10px;padding:7px;display:flex;flex-direction:column;}
+  .card .thumb{width:100%;aspect-ratio:1/1;border-radius:7px;background:var(--paper);display:flex;align-items:center;justify-content:center;overflow:hidden;color:var(--ink-soft);font-size:20px;margin-bottom:6px;}
   .card .thumb img{width:100%;height:100%;object-fit:cover;}
-  .card h3{margin:0 0 2px;font-size:13px;line-height:1.25;}
-  .card .cat{margin:0;color:var(--ink-soft);font-size:11px;}
-  .card .price{font-weight:700;color:var(--brand-dark);font-size:13px;margin-top:6px;}
-  .card .stock-low{color:var(--err);font-size:10.5px;margin:2px 0 0;}
-  .card .addBtn{margin-top:8px;background:var(--brand);color:#fff;border:none;border-radius:8px;padding:8px 0;font-size:12px;font-weight:700;cursor:pointer;width:100%;}
+  .card h3{margin:0 0 2px;font-size:11.5px;line-height:1.25;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;}
+  .card .cat{margin:0;color:var(--ink-soft);font-size:9.5px;}
+  .card .price{font-weight:700;color:var(--brand-dark);font-size:11.5px;margin-top:4px;}
+  .card .stock-low{color:var(--err);font-size:9px;margin:2px 0 0;}
+  .card .addBtn{margin-top:6px;background:var(--brand);color:#fff;border:none;border-radius:7px;padding:6px 0;font-size:10.5px;font-weight:700;cursor:pointer;width:100%;}
   .card .addBtn:disabled{background:#C7CDD3;cursor:not-allowed;}
-  .card .qtyStep{display:flex;align-items:center;justify-content:space-between;gap:6px;margin-top:8px;}
-  .card .qtyStep button{width:26px;height:26px;border-radius:6px;border:1px solid var(--line);background:#fff;font-size:14px;cursor:pointer;flex-shrink:0;}
+  .card .qtyStep{display:flex;align-items:center;justify-content:space-between;gap:4px;margin-top:6px;}
+  .card .qtyStep button{width:22px;height:22px;border-radius:6px;border:1px solid var(--line);background:#fff;font-size:13px;cursor:pointer;flex-shrink:0;}
   .empty{grid-column:1/-1;text-align:center;color:var(--ink-soft);padding:40px 0;font-size:14px;}
 
   #cartBar{position:fixed;left:0;right:0;bottom:0;background:#fff;border-top:1px solid var(--line);padding:12px 16px;display:none;justify-content:space-between;align-items:center;max-width:720px;margin:0 auto;box-shadow:0 -4px 14px rgba(0,0,0,.06);}
