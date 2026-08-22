@@ -14,8 +14,10 @@ enum Role {
 }
 enum OrderStatus {
   PENDING
-  PAID
-  FULFILLED
+  CONFIRMED
+  PREPARING
+  READY
+  DELIVERED
   CANCELLED
 }
 model Business {
