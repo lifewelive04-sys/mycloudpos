@@ -23,6 +23,29 @@ router.get('/orders/business', requireStaff, async (req, res) => {
   res.json(orders);
 });
 
+const orderStatusSchema = z.object({
+  status: z.enum(['PENDING', 'CONFIRMED', 'PREPARING', 'READY', 'DELIVERED', 'CANCELLED']),
+});
+
+// PATCH /api/shop/orders/:id/status — STAFF-ONLY. Updates an order's status
+// (e.g. from the admin Orders page's "Update status" buttons). This is what
+// actually persists that change so it (a) survives the admin re-syncing
+// orders from the server, and (b) shows up for the customer tracking their
+// own order.
+router.patch('/orders/:id/status', requireStaff, async (req, res) => {
+  const parsed = orderStatusSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
+  const existing = await prisma.order.findFirst({
+    where: { id: req.params.id, businessId: req.staff.businessId },
+  });
+  if (!existing) return res.status(404).json({ error: 'Order not found' });
+  const order = await prisma.order.update({
+    where: { id: existing.id },
+    data: { status: parsed.data.status },
+  });
+  res.json(order);
+});
+
 // GET /api/shop/:slug — PUBLIC. Storefront info + products for a shop link/QR scan.
 // This is what the customer's phone loads first when it hits the real,
 // publicly-hosted share link (e.g. https://yourapp.com/shop/:slug).
