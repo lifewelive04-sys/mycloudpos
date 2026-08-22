@@ -21,6 +21,12 @@ const updateSchema = z.object({
   // store directly (support/help line), separate from the business's own
   // internal contact phone above.
   supportPhone: z.string().optional(),
+  category: z.string().optional(),
+  description: z.string().optional(),
+  coverUrl: z.string().url().optional(),
+  openTime: z.string().optional(),
+  closeTime: z.string().optional(),
+  deliveryInfo: z.string().optional(),
 });
 // PATCH /api/business — owner/manager updates store profile (name, logo, currency, etc.)
 router.patch('/', requireRole('OWNER', 'MANAGER'), async (req, res) => {
