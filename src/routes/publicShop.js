@@ -109,6 +109,20 @@ router.get('/:slug', async (req, res) => {
   header .support-link{color:rgba(255,255,255,0.75);font-size:11px;text-decoration:none;border:1px solid rgba(255,255,255,0.25);border-radius:14px;padding:5px 9px;white-space:nowrap;}
   .store-info-strip{max-width:720px;margin:0 auto;padding:6px 16px 0;font-size:11.5px;color:var(--ink-soft);}
   .delivery-note{background:var(--paper);border-radius:8px;padding:10px 12px;font-size:12.5px;color:var(--ink);margin-bottom:14px;}
+  .order-card{background:#fff;border-radius:12px;padding:14px;margin-bottom:12px;}
+  .order-card-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;}
+  .order-card-head .oid{font-size:12.5px;font-weight:700;}
+  .order-card-head .odate{font-size:11px;color:var(--ink-soft);}
+  .status-pill{display:inline-block;font-size:11px;font-weight:700;padding:4px 10px;border-radius:999px;}
+  .status-pill.pending{background:#FBEEE4;color:#9C5716;}
+  .status-pill.confirmed{background:#E3ECFB;color:#2255A4;}
+  .status-pill.preparing{background:#FDF3D6;color:#8A6D1B;}
+  .status-pill.ready{background:#E6F0FB;color:#1D5FA8;}
+  .status-pill.delivered{background:#E1F0E6;color:var(--ok);}
+  .status-pill.cancelled{background:#F6E3E1;color:var(--err);}
+  .order-card .oitems{font-size:12px;color:var(--ink-soft);margin:8px 0;}
+  .order-card .ototal{display:flex;justify-content:space-between;font-weight:700;font-size:13.5px;padding-top:8px;border-top:1px solid var(--paper);}
+  .orders-empty{text-align:center;color:var(--ink-soft);padding:60px 0;font-size:14px;}
   #accountBtn{background:none;border:1px solid rgba(255,255,255,.35);color:#fff;border-radius:16px;padding:6px 10px;font-size:12px;cursor:pointer;}
   #backBtn{background:none;border:none;color:#fff;cursor:pointer;font-size:20px;padding:2px 4px;}
   #cartBtn{background:none;border:none;color:#fff;cursor:pointer;position:relative;padding:6px;font-size:20px;line-height:1;}
@@ -329,6 +343,7 @@ router.get('/:slug', async (req, res) => {
       <div id="confirmBody"></div>
     </div>
     <button class="fullBtn" id="printReceiptBtn">🖨 Print receipt</button>
+    <button class="ghostBtn" id="trackOrderBtn">Track my orders</button>
     <button class="ghostBtn" id="continueShoppingBtn">Continue shopping</button>
   </div>
 </div>
@@ -342,8 +357,14 @@ router.get('/:slug', async (req, res) => {
     <div class="field"><label>Saved address</label><textarea id="pf_address" rows="3"></textarea></div>
     <button class="fullBtn" id="saveProfileBtn">Save changes</button>
     <p id="profileMsg" style="font-size:13px;margin-top:8px;text-align:center;"></p>
+    <button class="ghostBtn" id="myOrdersBtn">My orders</button>
     <button class="ghostBtn" id="logoutBtn">Log out</button>
   </div>
+</div>
+
+<div id="ordersView" class="hidden">
+  <header><button id="ordersBackBtn">←</button><h1>My orders</h1></header>
+  <div class="page-view" id="ordersPageBody"></div>
 </div>
 
 <button class="ai-fab" id="aiFabBtn" aria-label="Open shopping assistant">
@@ -386,7 +407,7 @@ router.get('/:slug', async (req, res) => {
   const $ = (id) => document.getElementById(id);
   function escapeText(s){ const d = document.createElement('div'); d.textContent = s == null ? '' : s; return d.innerHTML; }
 
-  const VIEWS = ['authView','shopView','cartView','deliveryView','receiptView','profileView'];
+  const VIEWS = ['authView','shopView','cartView','deliveryView','receiptView','profileView','ordersView'];
   function showView(id){
     VIEWS.forEach(v => $(v).classList.toggle('hidden', v !== id));
     window.scrollTo(0,0);
@@ -651,6 +672,7 @@ router.get('/:slug', async (req, res) => {
     }
   });
   $('printReceiptBtn').addEventListener('click', () => window.print());
+  $('trackOrderBtn').addEventListener('click', () => { showView('ordersView'); loadMyOrders(); });
   $('continueShoppingBtn').addEventListener('click', () => showView('shopView'));
   $('receiptBackBtn').addEventListener('click', () => showView('shopView'));
 
@@ -683,6 +705,36 @@ router.get('/:slug', async (req, res) => {
     state.customer = null; state.cart = {};
     location.reload();
   });
+
+  // ---- My orders (tracking real order status the store sets) ----
+  $('myOrdersBtn').addEventListener('click', () => { showView('ordersView'); loadMyOrders(); });
+  $('ordersBackBtn').addEventListener('click', () => showView('profileView'));
+  const STATUS_LABEL = { PENDING:'Pending', CONFIRMED:'Confirmed', PREPARING:'Preparing', READY:'Ready for pickup/delivery', DELIVERED:'Delivered', CANCELLED:'Cancelled' };
+  async function loadMyOrders(){
+    const body = $('ordersPageBody');
+    body.innerHTML = '<div class="orders-empty">Loading your orders…</div>';
+    const token = localStorage.getItem(TOKEN_KEY);
+    try{
+      const res = await fetch('/api/shop/order/mine', { headers: { Authorization: 'Bearer ' + token } });
+      const orders = await res.json();
+      if(!res.ok || !Array.isArray(orders) || !orders.length){
+        body.innerHTML = '<div class="orders-empty">You haven\u2019t placed any orders here yet.</div>';
+        return;
+      }
+      body.innerHTML = orders.map(o => {
+        const statusKey = (o.status || 'PENDING').toLowerCase();
+        const itemsSummary = (o.items || []).map(i => escapeText(i.product ? i.product.name : 'Item') + ' × ' + i.quantity).join(', ');
+        return '<div class="order-card">'
+          + '<div class="order-card-head"><span class="oid">Order #'+String(o.id).slice(0,8).toUpperCase()+'</span><span class="odate">'+new Date(o.createdAt).toLocaleDateString()+'</span></div>'
+          + '<span class="status-pill '+statusKey+'">'+(STATUS_LABEL[o.status] || 'Pending')+'</span>'
+          + '<div class="oitems">'+itemsSummary+'</div>'
+          + '<div class="ototal"><span>Total</span><span>'+money(o.total)+'</span></div>'
+          + '</div>';
+      }).join('');
+    }catch(e){
+      body.innerHTML = '<div class="orders-empty">Could not load your orders — please try again.</div>';
+    }
+  }
 
   (function initDraggableFab(){
     const fab = $('aiFabBtn');
